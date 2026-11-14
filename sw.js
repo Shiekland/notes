@@ -7,7 +7,7 @@
     straight to the network, untouched.
   - Notes aren't stored by this file: the app keeps its own encrypted copies.
 */
-const CACHE = 'notes-app-shell-v2';
+const CACHE = 'notes-app-shell-v3'; // v3: any copy saved under the old rules is discarded
 const SHELL = ['./', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png'];
 const NETWORK_WAIT_MS = 4000;
 
@@ -28,7 +28,13 @@ self.addEventListener('fetch', event => {
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return; // Google and everything else: untouched
-  const isPage = request.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('/index.html');
+  // The app's page is exactly the folder's address or its index.html. Anything else opened
+  // as a page (say, an icon's address) just goes to the network, and is never saved as the app.
+  const scope = new URL(self.registration.scope).pathname;
+  const isPage = url.pathname === scope || url.pathname === `${scope}index.html`;
+  if (request.mode === 'navigate' && !isPage) return;
+  const isShellFile = SHELL.some(path => new URL(path, self.registration.scope).pathname === url.pathname);
+  if (!isPage && !isShellFile) return;
   event.respondWith(fromNetworkThenCache(request, isPage));
 });
 
@@ -41,7 +47,9 @@ async function fromNetworkThenCache(request, isPage) {
       fetch(isPage ? request.url : request, { cache: 'no-store', credentials: 'same-origin' }),
       new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), NETWORK_WAIT_MS))
     ]);
-    if (response.ok) await cache.put(key, response.clone());
+    // Only a real web page is ever saved as the app; other files only as themselves.
+    const type = response.headers.get('content-type') || '';
+    if (response.ok && (!isPage || type.includes('text/html'))) await cache.put(key, response.clone());
     return response;
   } catch {
     const saved = await cache.match(key, { ignoreSearch: true });
